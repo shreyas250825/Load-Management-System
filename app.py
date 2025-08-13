@@ -8,29 +8,19 @@ import threading
 import csv
 import json
 import os
-import pyttsx3
-import winsound
 import pandas as pd
 
 # Constants
 CONFIG_FILE = "load_config.json"
 DATA_LOG_FILE = "load_data_log.csv"
 MAX_DATA_POINTS = 200
-UPDATE_INTERVAL = 0.5  # seconds (converted from 500ms)
-
-# Initialize text-to-speech
-try:
-    tts_engine = pyttsx3.init()
-    tts_engine.setProperty("rate", 150)
-except:
-    tts_engine = None
+UPDATE_INTERVAL = 0.5  # seconds
 
 class LoadManagementSystem:
     def __init__(self):
         # System state
         self.running = False
         self.authenticated = False
-        self.alert_history = []
         self.is_closing = False
         self.load_profiles = {
             "Lighting": {"active": True, "current": 50.0, "power_factor": 0.9},
@@ -43,28 +33,24 @@ class LoadManagementSystem:
         self.voltage_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
         self.current_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
         self.power_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
-        self.energy_consumption = 0.0  # kWh
+        self.energy_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
         # Thresholds
         self.voltage_threshold = 230.0
         self.current_threshold = 150.0
         self.power_threshold = 30000.0
-        self.energy_budget = 1000.0  # kWh
+        self.energy_budget = 1000.0
         
-        # Tariff rates (Rs./kWh)
+        # Tariff rates
         self.tariff_rates = {
             "peak": 5.75,
             "off_peak": 5.75,
             "shoulder": 5.75
         }
         
-        # Initialize data thread
-        self.data_thread = None
-        
-        # Initialize Streamlit session state
-        if 'monitoring' not in st.session_state:
-            st.session_state.monitoring = False
+        # Initialize session state
         if 'alerts' not in st.session_state:
             st.session_state.alerts = []
         if 'latest_data' not in st.session_state:
@@ -75,9 +61,14 @@ class LoadManagementSystem:
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         
+        # Settings
+        self.logging_enabled = True
+        self.alert_sounds = False  # Disabled for cloud compatibility
+        self.voice_alerts = False  # Disabled for cloud compatibility
+        
         # Load configuration
         self.load_config()
-    
+
     def authenticate(self, username, password):
         """Simple authentication check"""
         if username == "mescom" and password == "password":
@@ -732,7 +723,11 @@ class LoadManagementSystem:
         
         self.log_alert("All monitoring data cleared", "info")
 
-# Main application
+    def trigger_alert(self, message):
+        """Visual alerts only (sound removed for cloud compatibility)"""
+        # Flash the page by forcing a rerun
+        st.experimental_rerun()
+
 def main():
     st.set_page_config(
         page_title="MESCOM Load Management System",
@@ -746,22 +741,16 @@ def main():
     
     system = st.session_state.system
     
-    # Authentication
+    # Simplified authentication
     if not system.authenticated:
         st.title("MESCOM Load Management System")
-        
-        with st.form("login"):
-            username = st.text_input("Username", value="mescom")
-            password = st.text_input("Password", type="password", value="password")
-            
-            if st.form_submit_button("Login"):
-                if system.authenticate(username, password):
-                    st.experimental_rerun()
-                else:
-                    st.error("Invalid credentials")
+        if st.button("Login (Demo)"):
+            system.authenticated = True
+            st.rerun()
     else:
         # Main interface
         system.create_main_interface()
 
 if __name__ == "__main__":
     main()
+    
