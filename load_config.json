@@ -1,0 +1,36 @@
+{
+    "voltage_threshold": 500.0,
+    "current_threshold": 150.0,
+    "power_threshold": 30000.0,
+    "energy_budget": 1000.0,
+    "tariff_rates": {
+        "peak": 5.75,
+        "off_peak": 5.75,
+        "shoulder": 5.75
+    },
+    "load_profiles": {
+        "Lighting": {
+            "active": false,
+            "current": 50.0,
+            "power_factor": 0.9
+        },
+        "HVAC": {
+            "active": false,
+            "current": 200.0,
+            "power_factor": 0.85
+        },
+        "Computers": {
+            "active": false,
+            "current": 80.0,
+            "power_factor": 0.95
+        },
+        "Industrial": {
+            "active": false,
+            "current": 400.0,
+            "power_factor": 0.8
+        }
+    },
+    "logging_enabled": true,
+    "alert_sounds": true,
+    "voice_alerts": true
+}
