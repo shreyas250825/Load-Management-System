@@ -58,6 +58,18 @@ class LoadManagementSystem:
         self.alert_sounds = True
         self.voice_alerts = False
         
+        # Thread-safe data storage (independent of session state)
+        self.thread_safe_data = {
+            "monitoring": False,
+            "alerts": [],
+            "latest_data": {
+                "voltage": 0,
+                "current": 0,
+                "power": 0,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        }
+        
         # Load configuration
         self.load_config()
         
@@ -113,8 +125,12 @@ class LoadManagementSystem:
         
         with st.form("login_form"):
             st.subheader("Authentication Required")
-            username = st.text_input("Username", key="username")
-            password = st.text_input("Password", type="password", key="password")
+            
+            # Show default credentials
+            st.info("**Default Login Credentials:**\n- Username: admin\n- Password: password")
+            
+            username = st.text_input("Username", value="admin", key="username")
+            password = st.text_input("Password", value="password", key="password")
             
             if st.form_submit_button("Login"):
                 if self.authenticate(username, password):
@@ -390,6 +406,8 @@ class LoadManagementSystem:
         
         if st.button("Clear Alerts"):
             st.session_state.alerts = []
+            with self.thread_lock:
+                self.thread_safe_data["alerts"] = []
             self.log_alert("Alert history cleared", "info")
     
     def create_settings_tab(self):
@@ -468,6 +486,7 @@ class LoadManagementSystem:
         if not st.session_state.monitoring:
             with self.thread_lock:
                 st.session_state.monitoring = True
+                self.thread_safe_data["monitoring"] = True
                 self.running = True
                 if self.data_thread is None or not self.data_thread.is_alive():
                     self.data_thread = threading.Thread(target=self._data_collection_loop_wrapper)
@@ -481,6 +500,7 @@ class LoadManagementSystem:
         if st.session_state.monitoring:
             with self.thread_lock:
                 st.session_state.monitoring = False
+                self.thread_safe_data["monitoring"] = False
                 self.running = False
                 self.log_alert("Monitoring stopped", "info")
                 st.rerun()
@@ -488,11 +508,11 @@ class LoadManagementSystem:
     def _data_collection_loop_wrapper(self):
         """Wrapper for data collection loop to handle thread safety"""
         try:
-            while self.running and st.session_state.monitoring:
+            while self.running and self.thread_safe_data.get("monitoring", False):
                 self.data_collection_loop()
                 time.sleep(UPDATE_INTERVAL)
         except Exception as e:
-            self.log_alert(f"Data collection error: {str(e)}", "error")
+            self.log_alert_safe(f"Data collection error: {str(e)}", "error")
     
     def data_collection_loop(self):
         """Main data collection loop"""
@@ -510,8 +530,14 @@ class LoadManagementSystem:
             self.energy_consumption += energy_this_interval
             self.energy_data.append(self.energy_consumption)
             
-            # Update session state
-            st.session_state.latest_data = data
+            # Update session state safely
+            with self.thread_lock:
+                try:
+                    st.session_state.latest_data = data
+                    self.thread_safe_data["latest_data"] = data
+                except:
+                    # Fallback to thread-safe storage
+                    self.thread_safe_data["latest_data"] = data
             
             # Log data if enabled
             if self.logging_enabled:
@@ -521,7 +547,7 @@ class LoadManagementSystem:
             self.check_alerts(data)
             
         except Exception as e:
-            self.log_alert(f"System Error: {str(e)}", "error")
+            self.log_alert_safe(f"System Error: {str(e)}", "error")
     
     def simulate_realistic_data(self):
         """Generate realistic load data with occasional errors and spikes"""
@@ -537,7 +563,7 @@ class LoadManagementSystem:
         if random.random() < 0.05:
             voltage_spike_or_drop = random.uniform(-50, 50)
             voltage_variation += voltage_spike_or_drop
-            self.log_alert(f"Voltage fluctuation detected: {voltage_spike_or_drop:.1f}V fluctuation", "warning")
+            self.log_alert_safe(f"Voltage fluctuation detected: {voltage_spike_or_drop:.1f}V fluctuation", "warning")
         
         for load_name, load_data in self.load_profiles.items():
             if load_data["active"]:
@@ -548,7 +574,7 @@ class LoadManagementSystem:
                 if random.random() < 0.03:
                     current_spike = random.uniform(20.0, 50.0)
                     current_variation += current_spike
-                    self.log_alert(f"Current spike detected in {load_name}: {current_spike:.1f}A spike", "warning")
+                    self.log_alert_safe(f"Current spike detected in {load_name}: {current_spike:.1f}A spike", "warning")
                 
                 load_current = load_data["current"] + current_variation
                 total_current += load_current
@@ -567,7 +593,7 @@ class LoadManagementSystem:
         if random.random() < 0.02:
             power_error = random.uniform(-0.1, 0.1) * total_power
             total_power += power_error
-            self.log_alert(f"Power measurement error detected: {power_error:.1f}W error", "warning")
+            self.log_alert_safe(f"Power measurement error detected: {power_error:.1f}W error", "warning")
         
         # Ensure realistic bounds
         voltage = max(150, min(280, base_voltage + voltage_variation))
@@ -585,35 +611,35 @@ class LoadManagementSystem:
         """Check for threshold violations and trigger alerts"""
         # Check voltage
         if data["voltage"] > self.voltage_threshold:
-            self.log_alert(f"High Voltage Alert! {data['voltage']} V (Threshold: {self.voltage_threshold} V)", "warning")
+            self.log_alert_safe(f"High Voltage Alert! {data['voltage']} V (Threshold: {self.voltage_threshold} V)", "warning")
             self.trigger_alert(f"High voltage warning: {data['voltage']} V")
         elif data["voltage"] < 180:
-            self.log_alert(f"Low Voltage Alert! {data['voltage']} V (Minimum: 180 V)", "warning")
+            self.log_alert_safe(f"Low Voltage Alert! {data['voltage']} V (Minimum: 180 V)", "warning")
             self.trigger_alert(f"Low voltage warning: {data['voltage']} V")
         
         # Check current
         if data["current"] > self.current_threshold:
-            self.log_alert(f"High Current Alert! {data['current']} A (Threshold: {self.current_threshold} A)", "warning")
+            self.log_alert_safe(f"High Current Alert! {data['current']} A (Threshold: {self.current_threshold} A)", "warning")
             self.trigger_alert(f"High current warning: {data['current']} A")
         elif data["current"] < 0.1 and any(load["active"] for load in self.load_profiles.values()):
-            self.log_alert(f"Low Current Alert! {data['current']} A (Expected higher with active loads)", "warning")
+            self.log_alert_safe(f"Low Current Alert! {data['current']} A (Expected higher with active loads)", "warning")
             self.trigger_alert(f"Low current warning: {data['current']} A")
         
         # Check power
         if data["power"] > self.power_threshold:
-            self.log_alert(f"High Power Alert! {data['power']} W (Threshold: {self.power_threshold} W)", "warning")
+            self.log_alert_safe(f"High Power Alert! {data['power']} W (Threshold: {self.power_threshold} W)", "warning")
             self.trigger_alert(f"High power warning: {data['power']} W")
         elif data["power"] < 50 and any(load["active"] for load in self.load_profiles.values()):
-            self.log_alert(f"Low Power Alert! {data['power']} W (Expected higher with active loads)", "warning")
+            self.log_alert_safe(f"Low Power Alert! {data['power']} W (Expected higher with active loads)", "warning")
             self.trigger_alert(f"Low power warning: {data['power']} W")
         
         # Check energy budget
         if self.energy_consumption >= self.energy_budget * 0.9:
             if self.energy_consumption >= self.energy_budget:
-                self.log_alert(f"Energy Budget Exceeded! {self.energy_consumption:.2f}/{self.energy_budget} kWh", "error")
+                self.log_alert_safe(f"Energy Budget Exceeded! {self.energy_consumption:.2f}/{self.energy_budget} kWh", "error")
                 self.trigger_alert("Energy budget exceeded!")
             else:
-                self.log_alert(f"Energy Budget Warning! {self.energy_consumption:.2f}/{self.energy_budget} kWh (90% threshold)", "warning")
+                self.log_alert_safe(f"Energy Budget Warning! {self.energy_consumption:.2f}/{self.energy_budget} kWh (90% threshold)", "warning")
                 self.trigger_alert("Energy budget nearly exceeded!")
     
     def trigger_alert(self, message):
@@ -633,6 +659,26 @@ class LoadManagementSystem:
                 tts_engine.runAndWait()
             except:
                 pass
+    
+    def log_alert_safe(self, message, level="info"):
+        """Thread-safe version of log_alert"""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level.upper()}] {message}"
+        
+        with self.thread_lock:
+            try:
+                if hasattr(st.session_state, 'alerts'):
+                    st.session_state.alerts.append(log_entry)
+                    # Limit alert history to 100 entries
+                    if len(st.session_state.alerts) > 100:
+                        st.session_state.alerts = st.session_state.alerts[-100:]
+            except:
+                pass
+            
+            # Always update thread-safe storage
+            self.thread_safe_data["alerts"].append(log_entry)
+            if len(self.thread_safe_data["alerts"]) > 100:
+                self.thread_safe_data["alerts"] = self.thread_safe_data["alerts"][-100:]
     
     def log_alert(self, message, level="info"):
         """Log an alert message"""
@@ -674,7 +720,7 @@ class LoadManagementSystem:
                     self.energy_consumption
                 ])
         except Exception as e:
-            self.log_alert(f"Failed to log data: {str(e)}", "error")
+            self.log_alert_safe(f"Failed to log data: {str(e)}", "error")
     
     def export_data(self):
         """Export data to a CSV file"""
@@ -776,6 +822,14 @@ class LoadManagementSystem:
             "power": 0,
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        
+        with self.thread_lock:
+            self.thread_safe_data["latest_data"] = {
+                "voltage": 0,
+                "current": 0,
+                "power": 0,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
         
         self.log_alert("All monitoring data cleared", "info")
         st.rerun()
