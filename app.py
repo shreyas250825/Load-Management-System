@@ -33,15 +33,15 @@ class LoadManagementSystem:
         }
         
         # Data storage
-        self.voltage_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
-        self.current_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
-        self.power_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.voltage_data = deque([220] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.current_data = deque([50] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.power_data = deque([11000] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
         self.energy_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
         self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
         # Thresholds
-        self.voltage_threshold = 230.0
+        self.voltage_threshold = 250.0
         self.current_threshold = 150.0
         self.power_threshold = 30000.0
         self.energy_budget = 1000.0
@@ -49,8 +49,8 @@ class LoadManagementSystem:
         # Tariff rates
         self.tariff_rates = {
             "peak": 5.75,
-            "off_peak": 5.75,
-            "shoulder": 5.75
+            "off_peak": 3.50,
+            "shoulder": 4.25
         }
         
         # Settings
@@ -58,24 +58,29 @@ class LoadManagementSystem:
         self.alert_sounds = True
         self.voice_alerts = False
         
-        # Thread-safe data storage (independent of session state)
+        # Alert control
+        self.last_alert_time = {}
+        self.alert_cooldown = 10  # seconds between similar alerts
+        
+        # Thread-safe data storage
         self.thread_safe_data = {
             "monitoring": False,
-            "alerts": [],
             "latest_data": {
-                "voltage": 0,
-                "current": 0,
-                "power": 0,
+                "voltage": 220.0,
+                "current": 50.0,
+                "power": 11000.0,
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
+            },
+            "alerts": []
         }
-        
-        # Load configuration
-        self.load_config()
         
         # Thread management
         self.data_thread = None
         self.thread_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        
+        # Load configuration
+        self.load_config()
 
     def _init_session_state(self):
         """Initialize all required session state variables"""
@@ -84,14 +89,15 @@ class LoadManagementSystem:
             st.session_state.monitoring = False
             st.session_state.alerts = []
             st.session_state.latest_data = {
-                "voltage": 0,
-                "current": 0,
-                "power": 0,
+                "voltage": 220.0,
+                "current": 50.0,
+                "power": 11000.0,
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             st.session_state.login_attempts = 0
             st.session_state.locked_out = False
             st.session_state.lockout_time = None
+            st.session_state.data_update_counter = 0
 
     def authenticate(self, username, password):
         """Enhanced authentication with lockout after failed attempts"""
@@ -120,26 +126,32 @@ class LoadManagementSystem:
     
     def create_login_page(self):
         """Create a professional login page"""
-        st.title("MESCOM Load Management System")
+        st.title("⚡ MESCOM Load Management System")
         st.markdown("---")
         
         with st.form("login_form"):
-            st.subheader("Authentication Required")
+            st.subheader("🔐 Authentication Required")
             
             # Show default credentials
-            st.info("**Default Login Credentials:**\n- Username: admin\n- Password: password")
+            st.info("**Default Login Credentials:**\n- Username: `admin`\n- Password: `password`")
             
             username = st.text_input("Username", value="admin", key="username")
             password = st.text_input("Password", value="password", key="password")
             
-            if st.form_submit_button("Login"):
+            if st.form_submit_button("🚀 Login", type="primary"):
                 if self.authenticate(username, password):
+                    st.success("✅ Login successful!")
+                    time.sleep(1)
                     st.rerun()
     
     def create_main_interface(self):
         """Create main application interface"""
+        st.title("⚡ MESCOM Load Management System")
+        st.markdown(f"**Logged in as:** admin | **Status:** {'🟢 RUNNING' if st.session_state.monitoring else '🔴 STOPPED'}")
+        st.markdown("---")
+        
         # Create tabs
-        tabs = st.tabs(["Monitoring", "Load Control", "Energy & Cost", "Alerts", "Settings"])
+        tabs = st.tabs(["📊 Monitoring", "🎛️ Load Control", "💰 Energy & Cost", "⚠️ Alerts", "⚙️ Settings"])
         
         with tabs[0]:  # Monitoring tab
             self.create_monitoring_tab()
@@ -158,114 +170,182 @@ class LoadManagementSystem:
         
         # Status bar
         st.sidebar.markdown("---")
-        st.sidebar.markdown("**System Status:**")
+        st.sidebar.markdown("### 📊 System Status")
         status_text = "RUNNING" if st.session_state.monitoring else "STOPPED"
         status_color = "green" if st.session_state.monitoring else "red"
-        st.sidebar.markdown(f"Monitoring: :{status_color}[{status_text}]")
-        st.sidebar.markdown("MESCOM Certified")
+        st.sidebar.markdown(f"**Monitoring:** :{status_color}[{status_text}]")
+        st.sidebar.markdown("**System:** MESCOM Certified ✅")
+        st.sidebar.markdown(f"**Data Updates:** {st.session_state.data_update_counter}")
+        
+        # Auto-refresh when monitoring
+        if st.session_state.monitoring:
+            time.sleep(1)
+            st.rerun()
         
         # Logout button
-        if st.sidebar.button("Logout"):
+        if st.sidebar.button("🚪 Logout", type="secondary"):
             self.stop_monitoring()
             self.authenticated = False
             st.rerun()
     
     def create_monitoring_tab(self):
         """Create the monitoring tab with graphs and real-time data"""
-        st.header("Monitoring Dashboard")
+        st.header("📊 Real-time Monitoring Dashboard")
         
         # Monitoring Control Panel
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            if st.button("Start Monitoring", type="primary"):
+            if st.button("▶️ Start Monitoring", type="primary", disabled=st.session_state.monitoring):
                 self.start_monitoring()
         
         with col2:
-            if st.button("Stop Monitoring", type="secondary"):
+            if st.button("⏸️ Stop Monitoring", type="secondary", disabled=not st.session_state.monitoring):
                 self.stop_monitoring()
         
         with col3:
-            if st.button("Export Data"):
+            if st.button("📥 Export Data"):
                 self.export_data()
         
         with col4:
-            if st.button("Clear Data"):
+            if st.button("🗑️ Clear Data"):
                 self.clear_data()
         
         # Real-time data display
-        st.subheader("Real-time Data")
+        st.subheader("⚡ Live Electrical Parameters")
         data_col1, data_col2, data_col3, data_col4, data_col5 = st.columns(5)
         
+        # Calculate current rate and cost
+        current_hour = datetime.datetime.now().hour
+        if 8 <= current_hour < 20:  # Peak hours
+            rate = self.tariff_rates["peak"]
+            period = "Peak (8AM-8PM)"
+        elif 0 <= current_hour < 6:  # Off-peak hours
+            rate = self.tariff_rates["off_peak"]
+            period = "Off-Peak (12AM-6AM)"
+        else:  # Shoulder hours
+            rate = self.tariff_rates["shoulder"]
+            period = "Shoulder"
+        
+        cost = self.energy_consumption * rate
+        
         with data_col1:
-            st.metric("Voltage", f"{st.session_state.latest_data['voltage']} V")
+            voltage = st.session_state.latest_data['voltage']
+            delta_v = "normal" if 200 <= voltage <= 250 else "inverse"
+            st.metric("Voltage", f"{voltage} V", delta=f"{voltage-230:.1f}V", delta_color=delta_v)
         
         with data_col2:
-            st.metric("Current", f"{st.session_state.latest_data['current']} A")
+            current = st.session_state.latest_data['current']
+            delta_c = "normal" if current <= 100 else "inverse"
+            st.metric("Current", f"{current} A", delta=f"{current-50:.1f}A", delta_color=delta_c)
         
         with data_col3:
-            st.metric("Power", f"{st.session_state.latest_data['power']} W")
+            power = st.session_state.latest_data['power']
+            delta_p = "normal" if power <= 20000 else "inverse"
+            st.metric("Power", f"{power:.0f} W", delta=f"{power-11000:.0f}W", delta_color=delta_p)
         
         with data_col4:
-            st.metric("Energy", f"{self.energy_consumption:.5f} kWh")
+            st.metric("Energy", f"{self.energy_consumption:.3f} kWh", delta=f"Budget: {self.energy_budget:.1f} kWh")
         
         with data_col5:
-            current_hour = datetime.datetime.now().hour
-            if 8 <= current_hour < 20:  # Peak hours
-                rate = self.tariff_rates["peak"]
-            elif 0 <= current_hour < 6:  # Off-peak hours
-                rate = self.tariff_rates["off_peak"]
-            else:  # Shoulder hours
-                rate = self.tariff_rates["shoulder"]
-            
-            cost = self.energy_consumption * rate
-            st.metric("Cost", f"{cost:.5f} Rs.")
+            st.metric("Cost", f"₹{cost:.2f}", delta=f"Rate: ₹{rate}/kWh")
+            st.caption(f"Period: {period}")
+        
+        # System status indicators
+        st.subheader("🔍 System Health")
+        health_col1, health_col2, health_col3, health_col4 = st.columns(4)
+        
+        with health_col1:
+            v_status = "🟢 Normal" if 200 <= voltage <= 250 else "🔴 Alert"
+            st.metric("Voltage Status", v_status)
+        
+        with health_col2:
+            c_status = "🟢 Normal" if current <= self.current_threshold else "🔴 High"
+            st.metric("Current Status", c_status)
+        
+        with health_col3:
+            p_status = "🟢 Normal" if power <= self.power_threshold else "🔴 High"
+            st.metric("Power Status", p_status)
+        
+        with health_col4:
+            e_status = "🟢 OK" if self.energy_consumption < self.energy_budget * 0.9 else "🟡 Near Limit" if self.energy_consumption < self.energy_budget else "🔴 Exceeded"
+            st.metric("Energy Status", e_status)
         
         # Create graphs
         self.create_graphs()
+        
+        # Last update info
+        st.caption(f"Last updated: {st.session_state.latest_data['timestamp']} | Updates: {st.session_state.data_update_counter}")
     
     def create_graphs(self):
         """Create the monitoring graphs"""
-        st.subheader("Trends")
+        st.subheader("📈 Historical Trends")
         
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
+        # Create three separate graphs in tabs for better visibility
+        graph_tabs = st.tabs(["🔌 Voltage", "⚡ Current", "🔥 Power"])
         
-        # Voltage graph
-        ax1.plot(list(self.voltage_data), label="Voltage (V)", color="blue")
-        ax1.set_title("Voltage Over Time")
-        ax1.set_ylabel("Voltage (V)")
-        ax1.legend()
-        ax1.grid(True)
+        with graph_tabs[0]:
+            fig1, ax1 = plt.subplots(figsize=(12, 4))
+            ax1.plot(list(self.voltage_data), label="Voltage (V)", color="blue", linewidth=2)
+            ax1.axhline(y=self.voltage_threshold, color='red', linestyle='--', alpha=0.7, label=f"Threshold ({self.voltage_threshold}V)")
+            ax1.axhline(y=230, color='green', linestyle='--', alpha=0.7, label="Nominal (230V)")
+            ax1.set_title("Voltage Over Time", fontsize=14, fontweight='bold')
+            ax1.set_ylabel("Voltage (V)")
+            ax1.set_xlabel("Time (samples)")
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.set_ylim(150, 300)
+            st.pyplot(fig1)
         
-        # Current graph
-        ax2.plot(list(self.current_data), label="Current (A)", color="green")
-        ax2.set_title("Current Over Time")
-        ax2.set_ylabel("Current (A)")
-        ax2.legend()
-        ax2.grid(True)
+        with graph_tabs[1]:
+            fig2, ax2 = plt.subplots(figsize=(12, 4))
+            ax2.plot(list(self.current_data), label="Current (A)", color="orange", linewidth=2)
+            ax2.axhline(y=self.current_threshold, color='red', linestyle='--', alpha=0.7, label=f"Threshold ({self.current_threshold}A)")
+            ax2.set_title("Current Over Time", fontsize=14, fontweight='bold')
+            ax2.set_ylabel("Current (A)")
+            ax2.set_xlabel("Time (samples)")
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            st.pyplot(fig2)
         
-        # Power graph
-        ax3.plot(list(self.power_data), label="Power (W)", color="red")
-        ax3.set_title("Power Over Time")
-        ax3.set_ylabel("Power (W)")
-        ax3.legend()
-        ax3.grid(True)
-        
-        plt.tight_layout()
-        st.pyplot(fig)
+        with graph_tabs[2]:
+            fig3, ax3 = plt.subplots(figsize=(12, 4))
+            ax3.plot(list(self.power_data), label="Power (W)", color="red", linewidth=2)
+            ax3.axhline(y=self.power_threshold, color='red', linestyle='--', alpha=0.7, label=f"Threshold ({self.power_threshold}W)")
+            ax3.set_title("Power Over Time", fontsize=14, fontweight='bold')
+            ax3.set_ylabel("Power (W)")
+            ax3.set_xlabel("Time (samples)")
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            st.pyplot(fig3)
     
     def create_control_tab(self):
         """Create the load control tab"""
-        st.header("Load Management Controls")
+        st.header("🎛️ Load Management Controls")
+        
+        # Load status overview
+        st.subheader("📋 Load Status Overview")
+        overview_cols = st.columns(len(self.load_profiles))
+        
+        for i, (load_name, load_data) in enumerate(self.load_profiles.items()):
+            with overview_cols[i]:
+                status_icon = "🟢" if load_data["active"] else "🔴"
+                st.metric(
+                    f"{status_icon} {load_name}", 
+                    f"{load_data['current']:.0f}A",
+                    delta="ACTIVE" if load_data["active"] else "OFF"
+                )
+        
+        st.markdown("---")
         
         # Create load control widgets for each load profile
         for load_name, load_data in self.load_profiles.items():
-            with st.expander(load_name):
-                col1, col2 = st.columns(2)
+            with st.expander(f"🔧 {load_name} Controls", expanded=load_data["active"]):
+                col1, col2, col3 = st.columns(3)
                 
                 with col1:
                     status = st.checkbox(
-                        f"Active", 
+                        f"🔌 Active", 
                         value=load_data["active"], 
                         key=f"active_{load_name}",
                         on_change=self.update_load_status,
@@ -274,93 +354,135 @@ class LoadManagementSystem:
                 
                 with col2:
                     current = st.number_input(
-                        "Current (A)",
+                        "⚡ Current (A)",
+                        min_value=0.0,
+                        max_value=500.0,
                         value=float(load_data["current"]),
+                        step=10.0,
                         key=f"current_{load_name}",
                         on_change=self.update_load_current,
                         args=(load_name,)
                     )
                 
-                pf = st.number_input(
-                    "Power Factor",
-                    min_value=0.1,
-                    max_value=1.0,
-                    value=float(load_data["power_factor"]),
-                    key=f"pf_{load_name}",
-                    on_change=self.update_load_pf,
-                    args=(load_name,)
-                )
+                with col3:
+                    pf = st.slider(
+                        "📊 Power Factor",
+                        min_value=0.1,
+                        max_value=1.0,
+                        value=float(load_data["power_factor"]),
+                        step=0.05,
+                        key=f"pf_{load_name}",
+                        on_change=self.update_load_pf,
+                        args=(load_name,)
+                    )
+                
+                # Show calculated power for this load
+                if load_data["active"]:
+                    calc_power = 230 * load_data["current"] * load_data["power_factor"]
+                    st.info(f"💡 Estimated Power: {calc_power:.0f} W")
         
         # Emergency shutdown button
         st.markdown("---")
-        if st.button("EMERGENCY SHUTDOWN ALL LOADS", type="primary", use_container_width=True):
+        st.subheader("🚨 Emergency Controls")
+        if st.button("🛑 EMERGENCY SHUTDOWN ALL LOADS", type="primary", use_container_width=True):
             self.emergency_shutdown()
     
     def update_load_status(self, load_name):
         """Update load status from UI"""
         self.load_profiles[load_name]["active"] = st.session_state[f"active_{load_name}"]
-        self.log_alert(f"Load '{load_name}' turned {'ON' if self.load_profiles[load_name]['active'] else 'OFF'}")
+        status = "ON" if self.load_profiles[load_name]["active"] else "OFF"
+        self.log_alert(f"Load '{load_name}' turned {status}", "info")
     
     def update_load_current(self, load_name):
         """Update load current from UI"""
         self.load_profiles[load_name]["current"] = st.session_state[f"current_{load_name}"]
-        self.log_alert(f"Load '{load_name}' current updated to {self.load_profiles[load_name]['current']} A")
+        self.log_alert(f"Load '{load_name}' current updated to {self.load_profiles[load_name]['current']} A", "info")
     
     def update_load_pf(self, load_name):
         """Update load power factor from UI"""
         self.load_profiles[load_name]["power_factor"] = st.session_state[f"pf_{load_name}"]
-        self.log_alert(f"Load '{load_name}' power factor updated to {self.load_profiles[load_name]['power_factor']}")
+        self.log_alert(f"Load '{load_name}' power factor updated to {self.load_profiles[load_name]['power_factor']}", "info")
     
     def create_energy_tab(self):
         """Create the energy consumption and cost tab"""
-        st.header("Energy Consumption Analysis")
+        st.header("💰 Energy Consumption Analysis")
         
         # Energy summary
-        st.subheader("Energy Summary")
+        st.subheader("📊 Energy Summary")
         col1, col2, col3 = st.columns(3)
         
+        # Calculate current rate and cost
+        current_hour = datetime.datetime.now().hour
+        if 8 <= current_hour < 20:  # Peak hours
+            rate = self.tariff_rates["peak"]
+            period = "Peak Hours (8AM-8PM)"
+        elif 0 <= current_hour < 6:  # Off-peak hours
+            rate = self.tariff_rates["off_peak"]
+            period = "Off-Peak Hours (12AM-6AM)"
+        else:  # Shoulder hours
+            rate = self.tariff_rates["shoulder"]
+            period = "Shoulder Hours (6AM-8AM, 8PM-12AM)"
+        
+        cost = self.energy_consumption * rate
+        
         with col1:
-            st.metric("Total Energy Consumed", f"{self.energy_consumption:.5f} kWh")
-            
-            # Calculate cost
-            current_hour = datetime.datetime.now().hour
-            if 8 <= current_hour < 20:  # Peak hours
-                rate = self.tariff_rates["peak"]
-            elif 0 <= current_hour < 6:  # Off-peak hours
-                rate = self.tariff_rates["off_peak"]
-            else:  # Shoulder hours
-                rate = self.tariff_rates["shoulder"]
-            
-            cost = self.energy_consumption * rate
-            st.metric("Estimated Cost", f"{cost:.5f} Rs.")
+            st.metric("Total Energy Consumed", f"{self.energy_consumption:.3f} kWh")
+            st.metric("Estimated Cost", f"₹{cost:.2f}")
         
         with col2:
             budget_remaining = max(0, self.energy_budget - self.energy_consumption)
+            budget_percent = (self.energy_consumption / self.energy_budget * 100) if self.energy_budget > 0 else 0
+            
             st.metric("Energy Budget Remaining", f"{budget_remaining:.2f} kWh")
+            st.metric("Budget Used", f"{budget_percent:.1f}%")
+            
+            # Progress bar for budget
+            st.progress(min(budget_percent / 100, 1.0))
             
             # Time remaining estimate
             if self.energy_consumption > 0 and budget_remaining > 0:
-                consumption_rate = self.energy_consumption / ((datetime.datetime.now() - self.start_time).total_seconds() / 3600)
-                if consumption_rate > 0:
-                    hours_remaining = budget_remaining / consumption_rate
-                    st.metric("Estimated Time Remaining", f"{hours_remaining:.1f} hours")
+                runtime = (datetime.datetime.now() - self.start_time).total_seconds() / 3600
+                if runtime > 0:
+                    consumption_rate = self.energy_consumption / runtime
+                    if consumption_rate > 0:
+                        hours_remaining = budget_remaining / consumption_rate
+                        st.metric("Est. Time Remaining", f"{hours_remaining:.1f} hours")
         
         with col3:
-            # Tariff rate display
-            st.metric("Current Tariff Rate", f"{rate} Rs./kWh")
-            st.metric("Current Rate Period", 
-                     "Peak (8AM-8PM)" if 8 <= current_hour < 20 else 
-                     "Off-Peak (12AM-6AM)" if 0 <= current_hour < 6 else 
-                     "Shoulder Hours")
+            st.metric("Current Tariff Rate", f"₹{rate:.2f}/kWh")
+            st.metric("Current Period", period)
+            
+            # Show next rate change
+            next_change_hour = None
+            if current_hour < 6:
+                next_change_hour = 6
+                next_period = "Shoulder"
+            elif current_hour < 8:
+                next_change_hour = 8
+                next_period = "Peak"
+            elif current_hour < 20:
+                next_change_hour = 20
+                next_period = "Shoulder"
+            else:
+                next_change_hour = 24
+                next_period = "Off-Peak"
+            
+            if next_change_hour:
+                hours_until_change = next_change_hour - current_hour
+                if hours_until_change < 0:
+                    hours_until_change += 24
+                st.metric("Next Rate Change", f"{hours_until_change}h to {next_period}")
         
         # Tariff settings
-        st.subheader("Tariff Rates (Rs./kWh)")
+        st.subheader("💸 Tariff Configuration")
         col1, col2, col3 = st.columns(3)
         
         with col1:
             self.tariff_rates["peak"] = st.number_input(
                 "Peak Hours (8AM-8PM)",
                 value=float(self.tariff_rates["peak"]),
+                step=0.25,
+                format="%.2f",
                 key="peak_rate"
             )
         
@@ -368,6 +490,8 @@ class LoadManagementSystem:
             self.tariff_rates["off_peak"] = st.number_input(
                 "Off-Peak Hours (12AM-6AM)",
                 value=float(self.tariff_rates["off_peak"]),
+                step=0.25,
+                format="%.2f",
                 key="off_peak_rate"
             )
         
@@ -375,125 +499,213 @@ class LoadManagementSystem:
             self.tariff_rates["shoulder"] = st.number_input(
                 "Shoulder Hours (6AM-8AM, 8PM-12AM)",
                 value=float(self.tariff_rates["shoulder"]),
+                step=0.25,
+                format="%.2f",
                 key="shoulder_rate"
             )
         
-        if st.button("Update Tariff Rates"):
-            self.log_alert("Tariff rates updated")
+        if st.button("💾 Update Tariff Rates"):
+            self.log_alert("Tariff rates updated", "info")
+            self.save_config()
+            st.success("Tariff rates updated successfully!")
         
         # Energy history graph
-        st.subheader("Energy Consumption Over Time")
-        energy_fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(list(self.energy_data), label="Energy Consumption (kWh)", color="purple")
-        ax.set_xlabel("Time (s)")
+        st.subheader("📈 Energy Consumption History")
+        energy_fig, ax = plt.subplots(figsize=(12, 4))
+        ax.plot(list(self.energy_data), label="Energy Consumption (kWh)", color="purple", linewidth=2)
+        ax.axhline(y=self.energy_budget, color='red', linestyle='--', alpha=0.7, label=f"Budget ({self.energy_budget} kWh)")
+        ax.set_xlabel("Time (samples)")
         ax.set_ylabel("Energy (kWh)")
+        ax.set_title("Cumulative Energy Consumption", fontsize=14, fontweight='bold')
         ax.legend()
-        ax.grid(True)
+        ax.grid(True, alpha=0.3)
         st.pyplot(energy_fig)
     
     def create_alerts_tab(self):
         """Create the alerts history tab"""
-        st.header("Alert History")
+        st.header("⚠️ Alert History & Management")
+        
+        # Alert summary
+        if st.session_state.alerts:
+            error_count = sum(1 for alert in st.session_state.alerts if "ERROR" in alert)
+            warning_count = sum(1 for alert in st.session_state.alerts if "WARNING" in alert)
+            info_count = len(st.session_state.alerts) - error_count - warning_count
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("🔴 Errors", error_count)
+            with col2:
+                st.metric("🟡 Warnings", warning_count)
+            with col3:
+                st.metric("ℹ️ Info", info_count)
+            with col4:
+                st.metric("📝 Total", len(st.session_state.alerts))
+        
+        # Control buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Clear All Alerts"):
+                st.session_state.alerts = []
+                self.log_alert("Alert history cleared", "info")
+                st.rerun()
+        
+        with col2:
+            if st.button("📥 Export Alerts"):
+                if st.session_state.alerts:
+                    alert_df = pd.DataFrame(st.session_state.alerts, columns=["Alert"])
+                    st.download_button(
+                        label="Download Alerts as CSV",
+                        data=alert_df.to_csv(index=False),
+                        file_name=f"alerts_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+        
+        st.markdown("---")
         
         # Display alerts in reverse order (newest first)
-        for alert in reversed(st.session_state.alerts):
-            if "ERROR" in alert:
-                st.error(alert)
-            elif "WARNING" in alert:
-                st.warning(alert)
-            else:
-                st.info(alert)
-        
-        if st.button("Clear Alerts"):
-            st.session_state.alerts = []
-            with self.thread_lock:
-                self.thread_safe_data["alerts"] = []
-            self.log_alert("Alert history cleared", "info")
+        st.subheader("📋 Recent Alerts")
+        if st.session_state.alerts:
+            for i, alert in enumerate(reversed(st.session_state.alerts[-20:])):  # Show last 20 alerts
+                if "ERROR" in alert:
+                    st.error(f"🔴 {alert}")
+                elif "WARNING" in alert:
+                    st.warning(f"🟡 {alert}")
+                else:
+                    st.info(f"ℹ️ {alert}")
+        else:
+            st.info("No alerts to display.")
     
     def create_settings_tab(self):
         """Create the system settings tab"""
-        st.header("System Configuration")
+        st.header("⚙️ System Configuration")
         
         # Threshold settings
-        st.subheader("Alert Thresholds")
-        col1, col2, col3, col4 = st.columns(4)
+        st.subheader("🚨 Alert Thresholds")
         
-        with col1:
+        threshold_col1, threshold_col2 = st.columns(2)
+        
+        with threshold_col1:
             self.voltage_threshold = st.number_input(
-                "Voltage Threshold (V)",
+                "🔌 Voltage Threshold (V)",
+                min_value=200.0,
+                max_value=300.0,
                 value=float(self.voltage_threshold),
+                step=5.0,
                 key="voltage_threshold"
             )
-        
-        with col2:
+            
             self.current_threshold = st.number_input(
-                "Current Threshold (A)",
+                "⚡ Current Threshold (A)",
+                min_value=50.0,
+                max_value=500.0,
                 value=float(self.current_threshold),
+                step=10.0,
                 key="current_threshold"
             )
         
-        with col3:
+        with threshold_col2:
             self.power_threshold = st.number_input(
-                "Power Threshold (W)",
+                "🔥 Power Threshold (W)",
+                min_value=10000.0,
+                max_value=100000.0,
                 value=float(self.power_threshold),
+                step=1000.0,
                 key="power_threshold"
             )
-        
-        with col4:
+            
             self.energy_budget = st.number_input(
-                "Energy Budget (kWh)",
+                "🔋 Energy Budget (kWh)",
+                min_value=100.0,
+                max_value=10000.0,
                 value=float(self.energy_budget),
+                step=100.0,
                 key="energy_budget"
             )
         
-        if st.button("Update Thresholds"):
-            self.log_alert("Alert thresholds updated")
+        # Alert cooldown setting
+        st.subheader("⏰ Alert Settings")
+        self.alert_cooldown = st.slider(
+            "Alert Cooldown (seconds)",
+            min_value=5,
+            max_value=60,
+            value=self.alert_cooldown,
+            help="Minimum time between similar alerts"
+        )
+        
+        if st.button("💾 Update Thresholds"):
+            self.log_alert("Alert thresholds updated", "info")
             self.save_config()
+            st.success("Thresholds updated successfully!")
         
         # System settings
-        st.subheader("System Settings")
-        self.logging_enabled = st.checkbox(
-            "Enable Data Logging",
-            value=bool(self.logging_enabled),
-            key="logging_enabled"
-        )
+        st.subheader("🔧 System Settings")
         
-        self.alert_sounds = st.checkbox(
-            "Enable Alert Sounds",
-            value=bool(self.alert_sounds),
-            key="alert_sounds"
-        )
+        settings_col1, settings_col2 = st.columns(2)
         
-        self.voice_alerts = st.checkbox(
-            "Enable Voice Alerts",
-            value=bool(self.voice_alerts),
-            key="voice_alerts"
-        )
+        with settings_col1:
+            self.logging_enabled = st.checkbox(
+                "📝 Enable Data Logging",
+                value=bool(self.logging_enabled),
+                key="logging_enabled"
+            )
+            
+            self.alert_sounds = st.checkbox(
+                "🔊 Enable Alert Sounds",
+                value=bool(self.alert_sounds),
+                key="alert_sounds"
+            )
         
-        col1, col2 = st.columns(2)
+        with settings_col2:
+            self.voice_alerts = st.checkbox(
+                "🗣️ Enable Voice Alerts",
+                value=bool(self.voice_alerts),
+                key="voice_alerts"
+            )
         
-        with col1:
-            if st.button("Save Configuration"):
+        # Configuration management
+        st.subheader("💾 Configuration Management")
+        config_col1, config_col2, config_col3 = st.columns(3)
+        
+        with config_col1:
+            if st.button("💾 Save Configuration"):
                 self.save_config()
+                st.success("Configuration saved!")
         
-        with col2:
-            if st.button("Load Configuration"):
+        with config_col2:
+            if st.button("📂 Load Configuration"):
                 self.load_config()
+                st.success("Configuration loaded!")
                 st.rerun()
+        
+        with config_col3:
+            if st.button("🔄 Reset to Defaults"):
+                self.reset_to_defaults()
+                st.success("Reset to default settings!")
+                st.rerun()
+    
+    def reset_to_defaults(self):
+        """Reset all settings to default values"""
+        self.voltage_threshold = 250.0
+        self.current_threshold = 150.0
+        self.power_threshold = 30000.0
+        self.energy_budget = 1000.0
+        self.tariff_rates = {"peak": 5.75, "off_peak": 3.50, "shoulder": 4.25}
+        self.alert_cooldown = 10
+        self.log_alert("System reset to default settings", "info")
     
     def start_monitoring(self):
         """Start the monitoring process"""
         if not st.session_state.monitoring:
-            with self.thread_lock:
-                st.session_state.monitoring = True
-                self.thread_safe_data["monitoring"] = True
-                self.running = True
-                if self.data_thread is None or not self.data_thread.is_alive():
-                    self.data_thread = threading.Thread(target=self._data_collection_loop_wrapper)
-                    self.data_thread.daemon = True
-                    self.data_thread.start()
-                self.log_alert("Monitoring started", "info")
-                st.rerun()
+            st.session_state.monitoring = True
+            self.running = True
+            self.stop_event.clear()
+            
+            if self.data_thread is None or not self.data_thread.is_alive():
+                self.data_thread = threading.Thread(target=self._data_collection_loop_wrapper, daemon=True)
+                self.data_thread.start()
+            
+            self.log_alert("🟢 Monitoring started", "info")
+            st.rerun()
     
     def stop_monitoring(self):
         """Stop the monitoring process"""
@@ -676,6 +888,8 @@ class LoadManagementSystem:
                 pass
             
             # Always update thread-safe storage
+            if not hasattr(self, 'thread_safe_data'):
+                self.thread_safe_data = {"alerts": []}
             self.thread_safe_data["alerts"].append(log_entry)
             if len(self.thread_safe_data["alerts"]) > 100:
                 self.thread_safe_data["alerts"] = self.thread_safe_data["alerts"][-100:]
@@ -855,3 +1069,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
