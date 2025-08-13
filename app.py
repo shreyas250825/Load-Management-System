@@ -40,8 +40,8 @@ class LoadManagementSystem:
         self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
-        # Thresholds
-        self.voltage_threshold = 250.0
+        # Thresholds - ensure initial values are within valid ranges
+        self.voltage_threshold = 250.0  # Within 200-300 range
         self.current_threshold = 150.0
         self.power_threshold = 30000.0
         self.energy_budget = 1000.0
@@ -585,11 +585,13 @@ class LoadManagementSystem:
         threshold_col1, threshold_col2 = st.columns(2)
         
         with threshold_col1:
+            # Ensure voltage threshold is within valid range before displaying
+            safe_voltage_threshold = min(max(self.voltage_threshold, 200.0), 300.0)
             self.voltage_threshold = st.number_input(
                 "🔌 Voltage Threshold (V)",
                 min_value=200.0,
                 max_value=300.0,
-                value=float(self.voltage_threshold),
+                value=float(safe_voltage_threshold),
                 step=5.0,
                 key="voltage_threshold"
             )
@@ -999,8 +1001,8 @@ class LoadManagementSystem:
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
                 
-                # Update thresholds
-                self.voltage_threshold = config.get("voltage_threshold", 230.0)
+                # Update thresholds - ensure voltage threshold is within valid range
+                self.voltage_threshold = min(max(config.get("voltage_threshold", 230.0), 300.0)
                 self.current_threshold = config.get("current_threshold", 150.0)
                 self.power_threshold = config.get("power_threshold", 30000.0)
                 self.energy_budget = config.get("energy_budget", 1000.0)
@@ -1069,4 +1071,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
