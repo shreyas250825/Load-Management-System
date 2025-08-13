@@ -67,8 +67,8 @@ class LoadManagementSystem:
         
         # Settings
         self.logging_enabled = True
-        self.alert_sounds = False  # Disabled for cloud compatibility
-        self.voice_alerts = False  # Disabled for cloud compatibility
+        self.alert_sounds = True
+        self.voice_alerts = False
         
         # Load configuration
         self.load_config()
@@ -601,8 +601,22 @@ class LoadManagementSystem:
                 self.trigger_alert("Energy budget nearly exceeded!")
     
     def trigger_alert(self, message):
-        """Visual alerts only (sound removed for cloud compatibility)"""
-        st.rerun()
+        """Trigger visual and audible alerts"""
+        if self.alert_sounds:
+            try:
+                import winsound
+                winsound.Beep(1000, 1000)
+            except:
+                pass
+        
+        if self.voice_alerts:
+            try:
+                import pyttsx3
+                tts_engine = pyttsx3.init()
+                tts_engine.say(message)
+                tts_engine.runAndWait()
+            except:
+                pass
     
     def log_alert(self, message, level="info"):
         """Log an alert message"""
