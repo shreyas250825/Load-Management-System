@@ -19,20 +19,8 @@ UPDATE_INTERVAL = 0.5  # seconds
 class LoadManagementSystem:
     def __init__(self):
         # Initialize all session state variables
-        if 'system_initialized' not in st.session_state:
-            st.session_state.system_initialized = True
-            st.session_state.monitoring = False
-            st.session_state.alerts = []
-            st.session_state.latest_data = {
-                "voltage": 0,
-                "current": 0,
-                "power": 0,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            st.session_state.login_attempts = 0
-            st.session_state.locked_out = False
-            st.session_state.lockout_time = None
-
+        self._init_session_state()
+        
         # System state
         self.running = False
         self.authenticated = False
@@ -72,6 +60,26 @@ class LoadManagementSystem:
         
         # Load configuration
         self.load_config()
+        
+        # Thread management
+        self.data_thread = None
+        self.thread_lock = threading.Lock()
+
+    def _init_session_state(self):
+        """Initialize all required session state variables"""
+        if 'system_initialized' not in st.session_state:
+            st.session_state.system_initialized = True
+            st.session_state.monitoring = False
+            st.session_state.alerts = []
+            st.session_state.latest_data = {
+                "voltage": 0,
+                "current": 0,
+                "power": 0,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.login_attempts = 0
+            st.session_state.locked_out = False
+            st.session_state.lockout_time = None
 
     def authenticate(self, username, password):
         """Enhanced authentication with lockout after failed attempts"""
@@ -142,6 +150,7 @@ class LoadManagementSystem:
         
         # Logout button
         if st.sidebar.button("Logout"):
+            self.stop_monitoring()
             self.authenticated = False
             st.rerun()
     
@@ -457,55 +466,62 @@ class LoadManagementSystem:
     def start_monitoring(self):
         """Start the monitoring process"""
         if not st.session_state.monitoring:
-            st.session_state.monitoring = True
-            self.running = True
-            self.data_thread = threading.Thread(target=self.data_collection_loop)
-            self.data_thread.daemon = True
-            self.data_thread.start()
-            self.log_alert("Monitoring started", "info")
-            st.rerun()
+            with self.thread_lock:
+                st.session_state.monitoring = True
+                self.running = True
+                if self.data_thread is None or not self.data_thread.is_alive():
+                    self.data_thread = threading.Thread(target=self._data_collection_loop_wrapper)
+                    self.data_thread.daemon = True
+                    self.data_thread.start()
+                self.log_alert("Monitoring started", "info")
+                st.rerun()
     
     def stop_monitoring(self):
         """Stop the monitoring process"""
         if st.session_state.monitoring:
-            st.session_state.monitoring = False
-            self.running = False
-            self.log_alert("Monitoring stopped", "info")
-            st.rerun()
+            with self.thread_lock:
+                st.session_state.monitoring = False
+                self.running = False
+                self.log_alert("Monitoring stopped", "info")
+                st.rerun()
+    
+    def _data_collection_loop_wrapper(self):
+        """Wrapper for data collection loop to handle thread safety"""
+        try:
+            while self.running and st.session_state.monitoring:
+                self.data_collection_loop()
+                time.sleep(UPDATE_INTERVAL)
+        except Exception as e:
+            self.log_alert(f"Data collection error: {str(e)}", "error")
     
     def data_collection_loop(self):
         """Main data collection loop"""
-        while self.running and st.session_state.monitoring:
-            try:
-                # Simulate data
-                data = self.simulate_realistic_data()
-                
-                # Update data storage
-                self.voltage_data.append(data["voltage"])
-                self.current_data.append(data["current"])
-                self.power_data.append(data["power"])
-                
-                # Calculate energy consumption
-                energy_this_interval = (data["power"] / 1000) * (UPDATE_INTERVAL / 3600)
-                self.energy_consumption += energy_this_interval
-                self.energy_data.append(self.energy_consumption)
-                
-                # Update session state
-                st.session_state.latest_data = data
-                
-                # Log data if enabled
-                if self.logging_enabled:
-                    self.log_data(data)
-                
-                # Check for alerts
-                self.check_alerts(data)
-                
-                # Throttle update rate
-                time.sleep(UPDATE_INTERVAL)
-                
-            except Exception as e:
-                self.log_alert(f"System Error: {str(e)}", "error")
-                time.sleep(1)
+        try:
+            # Simulate data
+            data = self.simulate_realistic_data()
+            
+            # Update data storage
+            self.voltage_data.append(data["voltage"])
+            self.current_data.append(data["current"])
+            self.power_data.append(data["power"])
+            
+            # Calculate energy consumption
+            energy_this_interval = (data["power"] / 1000) * (UPDATE_INTERVAL / 3600)
+            self.energy_consumption += energy_this_interval
+            self.energy_data.append(self.energy_consumption)
+            
+            # Update session state
+            st.session_state.latest_data = data
+            
+            # Log data if enabled
+            if self.logging_enabled:
+                self.log_data(data)
+            
+            # Check for alerts
+            self.check_alerts(data)
+            
+        except Exception as e:
+            self.log_alert(f"System Error: {str(e)}", "error")
     
     def simulate_realistic_data(self):
         """Generate realistic load data with occasional errors and spikes"""
