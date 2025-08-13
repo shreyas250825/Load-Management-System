@@ -18,6 +18,21 @@ UPDATE_INTERVAL = 0.5  # seconds
 
 class LoadManagementSystem:
     def __init__(self):
+        # Initialize all session state variables
+        if 'system_initialized' not in st.session_state:
+            st.session_state.system_initialized = True
+            st.session_state.monitoring = False
+            st.session_state.alerts = []
+            st.session_state.latest_data = {
+                "voltage": 0,
+                "current": 0,
+                "power": 0,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.login_attempts = 0
+            st.session_state.locked_out = False
+            st.session_state.lockout_time = None
+
         # System state
         self.running = False
         self.authenticated = False
@@ -50,17 +65,6 @@ class LoadManagementSystem:
             "shoulder": 5.75
         }
         
-        # Initialize session state
-        if 'alerts' not in st.session_state:
-            st.session_state.alerts = []
-        if 'latest_data' not in st.session_state:
-            st.session_state.latest_data = {
-                "voltage": 0,
-                "current": 0,
-                "power": 0,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-        
         # Settings
         self.logging_enabled = True
         self.alert_sounds = False  # Disabled for cloud compatibility
@@ -70,11 +74,43 @@ class LoadManagementSystem:
         self.load_config()
 
     def authenticate(self, username, password):
-        """Simple authentication check"""
-        if username == "mescom" and password == "password":
+        """Enhanced authentication with lockout after failed attempts"""
+        if st.session_state.locked_out:
+            lockout_duration = datetime.datetime.now() - st.session_state.lockout_time
+            if lockout_duration.total_seconds() < 300:  # 5 minute lockout
+                st.error("Account locked. Please try again after 5 minutes.")
+                return False
+            else:
+                st.session_state.locked_out = False
+                st.session_state.login_attempts = 0
+
+        if username == "admin" and password == "password":
             self.authenticated = True
+            st.session_state.login_attempts = 0
             return True
-        return False
+        else:
+            st.session_state.login_attempts += 1
+            if st.session_state.login_attempts >= 3:
+                st.session_state.locked_out = True
+                st.session_state.lockout_time = datetime.datetime.now()
+                st.error("Too many failed attempts. Account locked for 5 minutes.")
+            else:
+                st.error("Invalid credentials")
+            return False
+    
+    def create_login_page(self):
+        """Create a professional login page"""
+        st.title("MESCOM Load Management System")
+        st.markdown("---")
+        
+        with st.form("login_form"):
+            st.subheader("Authentication Required")
+            username = st.text_input("Username", key="username")
+            password = st.text_input("Password", type="password", key="password")
+            
+            if st.form_submit_button("Login"):
+                if self.authenticate(username, password):
+                    st.rerun()
     
     def create_main_interface(self):
         """Create main application interface"""
@@ -103,6 +139,11 @@ class LoadManagementSystem:
         status_color = "green" if st.session_state.monitoring else "red"
         st.sidebar.markdown(f"Monitoring: :{status_color}[{status_text}]")
         st.sidebar.markdown("MESCOM Certified")
+        
+        # Logout button
+        if st.sidebar.button("Logout"):
+            self.authenticated = False
+            st.rerun()
     
     def create_monitoring_tab(self):
         """Create the monitoring tab with graphs and real-time data"""
@@ -144,7 +185,6 @@ class LoadManagementSystem:
             st.metric("Energy", f"{self.energy_consumption:.5f} kWh")
         
         with data_col5:
-            # Calculate cost
             current_hour = datetime.datetime.now().hour
             if 8 <= current_hour < 20:  # Peak hours
                 rate = self.tariff_rates["peak"]
@@ -163,7 +203,6 @@ class LoadManagementSystem:
         """Create the monitoring graphs"""
         st.subheader("Trends")
         
-        # Create figure with subplots
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12))
         
         # Voltage graph
@@ -333,7 +372,6 @@ class LoadManagementSystem:
         
         # Display alerts in reverse order (newest first)
         for alert in reversed(st.session_state.alerts):
-            # Parse alert level for color coding
             if "ERROR" in alert:
                 st.error(alert)
             elif "WARNING" in alert:
@@ -414,7 +452,7 @@ class LoadManagementSystem:
         with col2:
             if st.button("Load Configuration"):
                 self.load_config()
-                st.experimental_rerun()  # Refresh the UI
+                st.rerun()
     
     def start_monitoring(self):
         """Start the monitoring process"""
@@ -425,6 +463,7 @@ class LoadManagementSystem:
             self.data_thread.daemon = True
             self.data_thread.start()
             self.log_alert("Monitoring started", "info")
+            st.rerun()
     
     def stop_monitoring(self):
         """Stop the monitoring process"""
@@ -432,6 +471,7 @@ class LoadManagementSystem:
             st.session_state.monitoring = False
             self.running = False
             self.log_alert("Monitoring stopped", "info")
+            st.rerun()
     
     def data_collection_loop(self):
         """Main data collection loop"""
@@ -448,12 +488,13 @@ class LoadManagementSystem:
                 # Calculate energy consumption
                 energy_this_interval = (data["power"] / 1000) * (UPDATE_INTERVAL / 3600)
                 self.energy_consumption += energy_this_interval
+                self.energy_data.append(self.energy_consumption)
                 
                 # Update session state
                 st.session_state.latest_data = data
                 
                 # Log data if enabled
-                if hasattr(self, 'logging_enabled') and self.logging_enabled:
+                if self.logging_enabled:
                     self.log_data(data)
                 
                 # Check for alerts
@@ -560,31 +601,14 @@ class LoadManagementSystem:
                 self.trigger_alert("Energy budget nearly exceeded!")
     
     def trigger_alert(self, message):
-        """Trigger visual and audible alerts"""
-        if hasattr(self, 'alert_sounds') and self.alert_sounds:
-            try:
-                winsound.Beep(1000, 1000)
-            except:
-                pass
-        
-        if hasattr(self, 'voice_alerts') and self.voice_alerts and tts_engine:
-            try:
-                tts_engine.say(message)
-                tts_engine.runAndWait()
-            except:
-                pass
+        """Visual alerts only (sound removed for cloud compatibility)"""
+        st.rerun()
     
     def log_alert(self, message, level="info"):
         """Log an alert message"""
-        if self.is_closing:
-            return
-
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] [{level.upper()}] {message}"
-        
-        # Add to session state
-        if 'alerts' in st.session_state:
-            st.session_state.alerts.append(log_entry)
+        st.session_state.alerts.append(log_entry)
         
         # Limit alert history to 100 entries
         if len(st.session_state.alerts) > 100:
@@ -599,6 +623,7 @@ class LoadManagementSystem:
         
         self.log_alert("EMERGENCY SHUTDOWN ACTIVATED", "error")
         self.trigger_alert("Emergency shutdown activated!")
+        st.rerun()
     
     def log_data(self, data):
         """Log data to CSV file"""
@@ -665,9 +690,9 @@ class LoadManagementSystem:
             "energy_budget": self.energy_budget,
             "tariff_rates": self.tariff_rates,
             "load_profiles": self.load_profiles,
-            "logging_enabled": getattr(self, 'logging_enabled', True),
-            "alert_sounds": getattr(self, 'alert_sounds', True),
-            "voice_alerts": getattr(self, 'voice_alerts', True)
+            "logging_enabled": self.logging_enabled,
+            "alert_sounds": self.alert_sounds,
+            "voice_alerts": self.voice_alerts
         }
         
         try:
@@ -710,6 +735,7 @@ class LoadManagementSystem:
         self.voltage_data.clear()
         self.current_data.clear()
         self.power_data.clear()
+        self.energy_data.clear()
         self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
@@ -722,11 +748,7 @@ class LoadManagementSystem:
         }
         
         self.log_alert("All monitoring data cleared", "info")
-
-    def trigger_alert(self, message):
-        """Visual alerts only (sound removed for cloud compatibility)"""
-        # Flash the page by forcing a rerun
-        st.experimental_rerun()
+        st.rerun()
 
 def main():
     st.set_page_config(
@@ -741,16 +763,11 @@ def main():
     
     system = st.session_state.system
     
-    # Simplified authentication
+    # Show appropriate interface based on authentication
     if not system.authenticated:
-        st.title("MESCOM Load Management System")
-        if st.button("Login (Demo)"):
-            system.authenticated = True
-            st.rerun()
+        system.create_login_page()
     else:
-        # Main interface
         system.create_main_interface()
 
 if __name__ == "__main__":
     main()
-    
