@@ -108,7 +108,7 @@ class LoadManagementSystem:
     
     def create_login_page(self):
         """Create a professional login page"""
-        st.title("⚡ MESCOM Load Management System")
+        st.title("⚡Load Management System")
         st.markdown("---")
         
         with st.form("login_form"):
@@ -160,7 +160,7 @@ class LoadManagementSystem:
         status_text = "RUNNING" if st.session_state.monitoring else "STOPPED"
         status_color = "green" if st.session_state.monitoring else "red"
         st.sidebar.markdown(f"**Monitoring:** :{status_color}[{status_text}]")
-        st.sidebar.markdown("**System:** MESCOM Certified ✅")
+        st.sidebar.markdown("**System:** Prototype✅")
         st.sidebar.markdown(f"**Data Updates:** {st.session_state.data_update_counter}")
         st.sidebar.markdown(f"**Energy Consumed:** {st.session_state.energy_consumption:.3f} kWh")
         
@@ -951,7 +951,7 @@ class LoadManagementSystem:
 
 def main():
     st.set_page_config(
-        page_title="MESCOM Load Management System",
+        page_title="Load Management System",
         page_icon="⚡",
         layout="wide",
         initial_sidebar_state="expanded"
