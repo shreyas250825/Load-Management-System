@@ -1,16 +1,16 @@
 {
-    "voltage_threshold": 250.0,
+    "voltage_threshold": 500.0,
     "current_threshold": 150.0,
     "power_threshold": 30000.0,
     "energy_budget": 1000.0,
     "tariff_rates": {
         "peak": 5.75,
-        "off_peak": 3.50,
-        "shoulder": 4.25
+        "off_peak": 5.75,
+        "shoulder": 5.75
     },
     "load_profiles": {
         "Lighting": {
-            "active": true,
+            "active": false,
             "current": 50.0,
             "power_factor": 0.9
         },
@@ -20,7 +20,7 @@
             "power_factor": 0.85
         },
         "Computers": {
-            "active": true,
+            "active": false,
             "current": 80.0,
             "power_factor": 0.95
         },
@@ -32,6 +32,5 @@
     },
     "logging_enabled": true,
     "alert_sounds": true,
-    "voice_alerts": false,
-    "alert_cooldown": 10
+    "voice_alerts": true
 }
