@@ -109,7 +109,7 @@ You can try the live app here:
 ---
 
 ## Best Regards,
-## Shreyas Salian
+### Shreyas Salian
 
 ---
 
