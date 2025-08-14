@@ -40,8 +40,8 @@ class LoadManagementSystem:
         self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
-        # Thresholds - ensure initial values are within valid ranges
-        self.voltage_threshold = 250.0  # Within 200-300 range
+        # Thresholds
+        self.voltage_threshold = 250.0
         self.current_threshold = 150.0
         self.power_threshold = 30000.0
         self.energy_budget = 1000.0
@@ -62,25 +62,13 @@ class LoadManagementSystem:
         self.last_alert_time = {}
         self.alert_cooldown = 10  # seconds between similar alerts
         
-        # Thread-safe data storage
-        self.thread_safe_data = {
-            "monitoring": False,
-            "latest_data": {
-                "voltage": 220.0,
-                "current": 50.0,
-                "power": 11000.0,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            },
-            "alerts": []
-        }
+        # Load configuration
+        self.load_config()
         
         # Thread management
         self.data_thread = None
         self.thread_lock = threading.Lock()
         self.stop_event = threading.Event()
-        
-        # Load configuration
-        self.load_config()
 
     def _init_session_state(self):
         """Initialize all required session state variables"""
@@ -585,13 +573,11 @@ class LoadManagementSystem:
         threshold_col1, threshold_col2 = st.columns(2)
         
         with threshold_col1:
-            # Ensure voltage threshold is within valid range before displaying
-            safe_voltage_threshold = min(max(self.voltage_threshold, 200.0), 300.0)
             self.voltage_threshold = st.number_input(
                 "🔌 Voltage Threshold (V)",
                 min_value=200.0,
                 max_value=300.0,
-                value=float(safe_voltage_threshold),
+                value=float(self.voltage_threshold),
                 step=5.0,
                 key="voltage_threshold"
             )
@@ -707,23 +693,30 @@ class LoadManagementSystem:
                 self.data_thread.start()
             
             self.log_alert("🟢 Monitoring started", "info")
+            st.success("✅ Monitoring started successfully!")
             st.rerun()
     
     def stop_monitoring(self):
         """Stop the monitoring process"""
         if st.session_state.monitoring:
-            with self.thread_lock:
-                st.session_state.monitoring = False
-                self.thread_safe_data["monitoring"] = False
-                self.running = False
-                self.log_alert("Monitoring stopped", "info")
-                st.rerun()
+            st.session_state.monitoring = False
+            self.running = False
+            self.stop_event.set()
+            
+            # Wait for thread to finish
+            if self.data_thread and self.data_thread.is_alive():
+                self.data_thread.join(timeout=2.0)
+            
+            self.log_alert("🔴 Monitoring stopped", "info")
+            st.success("⏹️ Monitoring stopped successfully!")
+            st.rerun()
     
     def _data_collection_loop_wrapper(self):
         """Wrapper for data collection loop to handle thread safety"""
         try:
-            while self.running and self.thread_safe_data.get("monitoring", False):
-                self.data_collection_loop()
+            while self.running and not self.stop_event.is_set():
+                if st.session_state.monitoring:
+                    self.data_collection_loop()
                 time.sleep(UPDATE_INTERVAL)
         except Exception as e:
             self.log_alert_safe(f"Data collection error: {str(e)}", "error")
@@ -746,12 +739,8 @@ class LoadManagementSystem:
             
             # Update session state safely
             with self.thread_lock:
-                try:
-                    st.session_state.latest_data = data
-                    self.thread_safe_data["latest_data"] = data
-                except:
-                    # Fallback to thread-safe storage
-                    self.thread_safe_data["latest_data"] = data
+                st.session_state.latest_data = data
+                st.session_state.data_update_counter += 1
             
             # Log data if enabled
             if self.logging_enabled:
@@ -767,111 +756,133 @@ class LoadManagementSystem:
         """Generate realistic load data with occasional errors and spikes"""
         # Base values
         base_voltage = 230.0
-        voltage_variation = random.uniform(-10, 10)
+        voltage_variation = random.uniform(-5, 5)
         
         # Calculate total current based on active loads
         total_current = 0.0
         total_power = 0.0
         
-        # Simulate occasional voltage spikes or drops
-        if random.random() < 0.05:
-            voltage_spike_or_drop = random.uniform(-50, 50)
+        # Simulate occasional voltage spikes or drops (less frequent)
+        if random.random() < 0.01:  # 1% chance
+            voltage_spike_or_drop = random.uniform(-30, 30)
             voltage_variation += voltage_spike_or_drop
-            self.log_alert_safe(f"Voltage fluctuation detected: {voltage_spike_or_drop:.1f}V fluctuation", "warning")
+            self.log_alert_safe(f"Voltage fluctuation detected: {voltage_spike_or_drop:.1f}V", "warning")
         
         for load_name, load_data in self.load_profiles.items():
             if load_data["active"]:
-                # Add random variation
-                current_variation = random.uniform(-10.0, 10.0) * load_data["current"] / 10
+                # Add realistic variation
+                current_variation = random.uniform(-0.1, 0.1) * load_data["current"]
                 
-                # Simulate occasional current spikes
-                if random.random() < 0.03:
-                    current_spike = random.uniform(20.0, 50.0)
+                # Simulate occasional current spikes (rare)
+                if random.random() < 0.005:  # 0.5% chance
+                    current_spike = random.uniform(10.0, 30.0)
                     current_variation += current_spike
-                    self.log_alert_safe(f"Current spike detected in {load_name}: {current_spike:.1f}A spike", "warning")
+                    self.log_alert_safe(f"Current spike in {load_name}: +{current_spike:.1f}A", "warning")
                 
-                load_current = load_data["current"] + current_variation
+                load_current = max(0, load_data["current"] + current_variation)
                 total_current += load_current
                 
                 # Calculate power for this load
-                load_power = (base_voltage + voltage_variation) * load_current * load_data["power_factor"]
+                load_voltage = base_voltage + voltage_variation
+                load_power = load_voltage * load_current * load_data["power_factor"]
                 total_power += load_power
         
-        # Add background load
-        background_current = random.uniform(5.0, 10.0)
+        # Add background load (always present)
+        background_current = random.uniform(3.0, 8.0)
         total_current += background_current
-        background_power = (base_voltage + voltage_variation) * background_current * 0.9
+        background_power = (base_voltage + voltage_variation) * background_current * 0.92
         total_power += background_power
         
-        # Simulate occasional power measurement errors
-        if random.random() < 0.02:
-            power_error = random.uniform(-0.1, 0.1) * total_power
-            total_power += power_error
-            self.log_alert_safe(f"Power measurement error detected: {power_error:.1f}W error", "warning")
-        
         # Ensure realistic bounds
-        voltage = max(150, min(280, base_voltage + voltage_variation))
-        current = max(0, min(800, total_current))
-        power = max(0, min(200000, total_power))
+        voltage = max(180, min(270, base_voltage + voltage_variation))
+        current = max(0, min(600, total_current))
+        power = max(0, min(150000, total_power))
         
         return {
-            "voltage": round(voltage, 2),
-            "current": round(current, 2),
-            "power": round(power, 2),
+            "voltage": round(voltage, 1),
+            "current": round(current, 1),
+            "power": round(power, 0),
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     
     def check_alerts(self, data):
-        """Check for threshold violations and trigger alerts"""
-        # Check voltage
+        """Check for threshold violations and trigger alerts with cooldown"""
+        current_time = time.time()
+        
+        # Check voltage alerts
         if data["voltage"] > self.voltage_threshold:
-            self.log_alert_safe(f"High Voltage Alert! {data['voltage']} V (Threshold: {self.voltage_threshold} V)", "warning")
-            self.trigger_alert(f"High voltage warning: {data['voltage']} V")
-        elif data["voltage"] < 180:
-            self.log_alert_safe(f"Low Voltage Alert! {data['voltage']} V (Minimum: 180 V)", "warning")
-            self.trigger_alert(f"Low voltage warning: {data['voltage']} V")
+            if self.should_trigger_alert("high_voltage", current_time):
+                self.log_alert_safe(f"⚠️ HIGH VOLTAGE: {data['voltage']}V (Limit: {self.voltage_threshold}V)", "warning")
+                self.trigger_alert(f"High voltage: {data['voltage']} volts")
+                
+        elif data["voltage"] < 200:
+            if self.should_trigger_alert("low_voltage", current_time):
+                self.log_alert_safe(f"⚠️ LOW VOLTAGE: {data['voltage']}V (Minimum: 200V)", "warning")
+                self.trigger_alert(f"Low voltage: {data['voltage']} volts")
         
-        # Check current
+        # Check current alerts
         if data["current"] > self.current_threshold:
-            self.log_alert_safe(f"High Current Alert! {data['current']} A (Threshold: {self.current_threshold} A)", "warning")
-            self.trigger_alert(f"High current warning: {data['current']} A")
-        elif data["current"] < 0.1 and any(load["active"] for load in self.load_profiles.values()):
-            self.log_alert_safe(f"Low Current Alert! {data['current']} A (Expected higher with active loads)", "warning")
-            self.trigger_alert(f"Low current warning: {data['current']} A")
+            if self.should_trigger_alert("high_current", current_time):
+                self.log_alert_safe(f"⚠️ HIGH CURRENT: {data['current']}A (Limit: {self.current_threshold}A)", "warning")
+                self.trigger_alert(f"High current: {data['current']} amperes")
         
-        # Check power
+        # Check power alerts
         if data["power"] > self.power_threshold:
-            self.log_alert_safe(f"High Power Alert! {data['power']} W (Threshold: {self.power_threshold} W)", "warning")
-            self.trigger_alert(f"High power warning: {data['power']} W")
-        elif data["power"] < 50 and any(load["active"] for load in self.load_profiles.values()):
-            self.log_alert_safe(f"Low Power Alert! {data['power']} W (Expected higher with active loads)", "warning")
-            self.trigger_alert(f"Low power warning: {data['power']} W")
+            if self.should_trigger_alert("high_power", current_time):
+                self.log_alert_safe(f"⚠️ HIGH POWER: {data['power']}W (Limit: {self.power_threshold}W)", "warning")
+                self.trigger_alert(f"High power: {data['power']} watts")
         
-        # Check energy budget
-        if self.energy_consumption >= self.energy_budget * 0.9:
-            if self.energy_consumption >= self.energy_budget:
-                self.log_alert_safe(f"Energy Budget Exceeded! {self.energy_consumption:.2f}/{self.energy_budget} kWh", "error")
+        # Check energy budget alerts
+        budget_usage = (self.energy_consumption / self.energy_budget) * 100 if self.energy_budget > 0 else 0
+        
+        if budget_usage >= 100:
+            if self.should_trigger_alert("budget_exceeded", current_time):
+                self.log_alert_safe(f"🚨 ENERGY BUDGET EXCEEDED: {self.energy_consumption:.2f}/{self.energy_budget} kWh", "error")
                 self.trigger_alert("Energy budget exceeded!")
-            else:
-                self.log_alert_safe(f"Energy Budget Warning! {self.energy_consumption:.2f}/{self.energy_budget} kWh (90% threshold)", "warning")
+        elif budget_usage >= 90:
+            if self.should_trigger_alert("budget_warning", current_time):
+                self.log_alert_safe(f"⚠️ ENERGY BUDGET WARNING: {budget_usage:.1f}% used", "warning")
                 self.trigger_alert("Energy budget nearly exceeded!")
+        
+        # Voltage stability check
+        if len(self.voltage_data) >= 10:
+            recent_voltages = list(self.voltage_data)[-10:]
+            voltage_std = pd.Series(recent_voltages).std()
+            if voltage_std > 15:  # High voltage instability
+                if self.should_trigger_alert("voltage_instability", current_time):
+                    self.log_alert_safe(f"⚠️ VOLTAGE INSTABILITY: Std dev {voltage_std:.1f}V", "warning")
+                    self.trigger_alert("Voltage instability detected")
+    
+    def should_trigger_alert(self, alert_type, current_time):
+        """Check if enough time has passed since last alert of this type"""
+        if alert_type not in self.last_alert_time:
+            self.last_alert_time[alert_type] = current_time
+            return True
+        
+        time_since_last = current_time - self.last_alert_time[alert_type]
+        if time_since_last >= self.alert_cooldown:
+            self.last_alert_time[alert_type] = current_time
+            return True
+        
+        return False
     
     def trigger_alert(self, message):
         """Trigger visual and audible alerts"""
         if self.alert_sounds:
             try:
                 import winsound
-                winsound.Beep(1000, 1000)
-            except:
+                winsound.Beep(800, 500)  # Shorter beep
+            except ImportError:
                 pass
         
         if self.voice_alerts:
             try:
                 import pyttsx3
-                tts_engine = pyttsx3.init()
-                tts_engine.say(message)
-                tts_engine.runAndWait()
-            except:
+                engine = pyttsx3.init()
+                engine.setProperty('rate', 150)
+                engine.say(message)
+                engine.runAndWait()
+            except ImportError:
                 pass
     
     def log_alert_safe(self, message, level="info"):
@@ -881,20 +892,12 @@ class LoadManagementSystem:
         
         with self.thread_lock:
             try:
-                if hasattr(st.session_state, 'alerts'):
-                    st.session_state.alerts.append(log_entry)
-                    # Limit alert history to 100 entries
-                    if len(st.session_state.alerts) > 100:
-                        st.session_state.alerts = st.session_state.alerts[-100:]
+                st.session_state.alerts.append(log_entry)
+                # Limit alert history to 200 entries
+                if len(st.session_state.alerts) > 200:
+                    st.session_state.alerts = st.session_state.alerts[-200:]
             except:
-                pass
-            
-            # Always update thread-safe storage
-            if not hasattr(self, 'thread_safe_data'):
-                self.thread_safe_data = {"alerts": []}
-            self.thread_safe_data["alerts"].append(log_entry)
-            if len(self.thread_safe_data["alerts"]) > 100:
-                self.thread_safe_data["alerts"] = self.thread_safe_data["alerts"][-100:]
+                pass  # Gracefully handle session state access issues
     
     def log_alert(self, message, level="info"):
         """Log an alert message"""
@@ -902,19 +905,22 @@ class LoadManagementSystem:
         log_entry = f"[{timestamp}] [{level.upper()}] {message}"
         st.session_state.alerts.append(log_entry)
         
-        # Limit alert history to 100 entries
-        if len(st.session_state.alerts) > 100:
-            st.session_state.alerts = st.session_state.alerts[-100:]
+        # Limit alert history to 200 entries
+        if len(st.session_state.alerts) > 200:
+            st.session_state.alerts = st.session_state.alerts[-200:]
     
     def emergency_shutdown(self):
         """Turn off all loads"""
+        shutdown_count = 0
         for load_name in self.load_profiles:
             if self.load_profiles[load_name]["active"]:
                 self.load_profiles[load_name]["active"] = False
                 st.session_state[f"active_{load_name}"] = False
+                shutdown_count += 1
         
-        self.log_alert("EMERGENCY SHUTDOWN ACTIVATED", "error")
-        self.trigger_alert("Emergency shutdown activated!")
+        self.log_alert(f"🚨 EMERGENCY SHUTDOWN: {shutdown_count} loads deactivated", "error")
+        self.trigger_alert(f"Emergency shutdown activated! {shutdown_count} loads turned off!")
+        st.error(f"🚨 Emergency shutdown completed! {shutdown_count} loads deactivated.")
         st.rerun()
     
     def log_data(self, data):
@@ -943,35 +949,37 @@ class LoadManagementSystem:
         try:
             # Generate timestamp for each data point
             time_step = UPDATE_INTERVAL  # seconds
-            start_time = datetime.datetime.now() - datetime.timedelta(
-                seconds=len(self.voltage_data) * time_step)
+            now = datetime.datetime.now()
             
             data = []
             for i in range(len(self.voltage_data)):
-                timestamp = (start_time + datetime.timedelta(seconds=i * time_step)).strftime("%Y-%m-%d %H:%M:%S")
-                energy = sum(list(self.power_data)[:i+1]) / 1000 * (time_step / 3600)  # kWh
+                timestamp = (now - datetime.timedelta(seconds=(len(self.voltage_data)-i-1) * time_step))
+                timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 
                 data.append([
-                    timestamp,
+                    timestamp_str,
                     list(self.voltage_data)[i],
                     list(self.current_data)[i],
                     list(self.power_data)[i],
-                    energy
+                    list(self.energy_data)[i] if i < len(self.energy_data) else 0
                 ])
             
             df = pd.DataFrame(data, columns=["timestamp", "voltage", "current", "power", "energy"])
             
             # Use Streamlit's download button
+            csv_data = df.to_csv(index=False)
             st.download_button(
-                label="Download Data as CSV",
-                data=df.to_csv(index=False),
-                file_name="load_management_data.csv",
+                label="📥 Download Data as CSV",
+                data=csv_data,
+                file_name=f"load_management_data_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
             
-            self.log_alert("Data exported")
+            self.log_alert("📊 Data exported successfully", "info")
+            st.success(f"✅ Data exported! {len(data)} records ready for download.")
         except Exception as e:
             self.log_alert(f"Export failed: {str(e)}", "error")
+            st.error(f"❌ Export failed: {str(e)}")
     
     def save_config(self):
         """Save system configuration to file"""
@@ -984,13 +992,14 @@ class LoadManagementSystem:
             "load_profiles": self.load_profiles,
             "logging_enabled": self.logging_enabled,
             "alert_sounds": self.alert_sounds,
-            "voice_alerts": self.voice_alerts
+            "voice_alerts": self.voice_alerts,
+            "alert_cooldown": self.alert_cooldown
         }
         
         try:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(config, f, indent=4)
-            self.log_alert("Configuration saved")
+            self.log_alert("💾 Configuration saved", "info")
         except Exception as e:
             self.log_alert(f"Save failed: {str(e)}", "error")
     
@@ -1001,8 +1010,8 @@ class LoadManagementSystem:
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
                 
-                # Update thresholds - ensure voltage threshold is within valid range
-                self.voltage_threshold = min(max(config.get("voltage_threshold", 230.0), 300.0)
+                # Update thresholds
+                self.voltage_threshold = config.get("voltage_threshold", 250.0)
                 self.current_threshold = config.get("current_threshold", 150.0)
                 self.power_threshold = config.get("power_threshold", 30000.0)
                 self.energy_budget = config.get("energy_budget", 1000.0)
@@ -1017,45 +1026,61 @@ class LoadManagementSystem:
                 self.logging_enabled = config.get("logging_enabled", True)
                 self.alert_sounds = config.get("alert_sounds", True)
                 self.voice_alerts = config.get("voice_alerts", True)
+                self.alert_cooldown = config.get("alert_cooldown", 10)
                 
-                self.log_alert("Configuration loaded")
+                self.log_alert("📂 Configuration loaded", "info")
         except Exception as e:
             self.log_alert(f"Failed to load config: {str(e)}", "error")
     
     def clear_data(self):
         """Clear all monitoring data"""
-        self.voltage_data.clear()
-        self.current_data.clear()
-        self.power_data.clear()
-        self.energy_data.clear()
+        # Initialize with some baseline data instead of zeros
+        self.voltage_data = deque([230] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.current_data = deque([50] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.power_data = deque([11500] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
+        self.energy_data = deque([0] * MAX_DATA_POINTS, maxlen=MAX_DATA_POINTS)
         self.energy_consumption = 0.0
         self.start_time = datetime.datetime.now()
         
         # Reset latest data
         st.session_state.latest_data = {
-            "voltage": 0,
-            "current": 0,
-            "power": 0,
+            "voltage": 230.0,
+            "current": 50.0,
+            "power": 11500.0,
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        st.session_state.data_update_counter = 0
         
-        with self.thread_lock:
-            self.thread_safe_data["latest_data"] = {
-                "voltage": 0,
-                "current": 0,
-                "power": 0,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-        
-        self.log_alert("All monitoring data cleared", "info")
+        self.log_alert("🗑️ All monitoring data cleared", "info")
+        st.success("✅ Monitoring data cleared successfully!")
         st.rerun()
 
 def main():
     st.set_page_config(
         page_title="MESCOM Load Management System",
         page_icon="⚡",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
+    
+    # Custom CSS for better appearance
+    st.markdown("""
+    <style>
+    .main > div {
+        padding-top: 2rem;
+    }
+    .stMetric > label {
+        font-size: 14px !important;
+        font-weight: 600 !important;
+    }
+    .stAlert > div {
+        padding: 0.5rem 1rem;
+    }
+    div[data-testid="stExpander"] > summary {
+        font-weight: 600;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
     # Initialize system
     if 'system' not in st.session_state:
