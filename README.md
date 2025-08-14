@@ -102,14 +102,14 @@ You can try the live app here:
 - **Educational Labs** – Demonstrate load management concepts to students.
 
 ---
-
-## 📝 License
-This project is licensed under the MIT License.
-
----
-
 ## ✨ Credits
 - **Original Tkinter Version:** Developed for offline usage.
 - **Streamlit Migration:** Interactive, browser-based version with improved UI/UX.
 
 ---
+
+## Best Regards,
+## Shreyas Salian
+
+---
+
