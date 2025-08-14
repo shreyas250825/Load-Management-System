@@ -128,7 +128,7 @@ class LoadManagementSystem:
     
     def create_main_interface(self):
         """Create main application interface"""
-        st.title("⚡ MESCOM Load Management System")
+        st.title("⚡Load Management System")
         st.markdown(f"**Logged in as:** admin | **Status:** {'🟢 RUNNING' if st.session_state.monitoring else '🔴 STOPPED'}")
         st.markdown("---")
         
